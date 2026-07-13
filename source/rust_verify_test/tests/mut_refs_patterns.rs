@@ -2402,13 +2402,13 @@ test_verify_one_file_with_options! {
             tracked a: u64
         }
 
-        proof fn test(tracked x: X) {
+        proof fn test(tracked mut x: X) {
             match x {
                 X { a: ref mut y } => {
                 }
             }
         }
-    } => Err(err) => assert_vir_error_msg(err, "a 'mut ref' binding in a pattern is only allowed for exec mode")
+    } => Ok(())
 }
 
 test_verify_one_file_with_options! {
@@ -2421,13 +2421,13 @@ test_verify_one_file_with_options! {
             tracked x: X
         }
 
-        proof fn test(tracked y: Y) {
+        proof fn test(tracked mut y: Y) {
             match y {
                 Y { x: ref mut x0 @ X { a: _ } } => {
                 }
             }
         }
-    } => Err(err) => assert_vir_error_msg(err, "a 'mut ref' binding in a pattern is only allowed for exec mode")
+    } => Ok(())
 }
 
 test_verify_one_file_with_options! {
