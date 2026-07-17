@@ -2594,6 +2594,27 @@ impl Verifier {
         // Verify crate
         let time_verify_crate_start = Instant::now();
 
+        // The Vermilion Lean backend consumes the finalized pre-SST VIR crate
+        // out of process. This export is inert unless the environment variable
+        // is set; it does not affect verification and also runs under
+        // --no-verify, where Verus acts as a front end only.
+        if let Ok(path) = std::env::var("VERUS_VIR_EXPORT") {
+            let file = std::fs::File::create(&path).unwrap_or_else(|err| {
+                panic!("cannot create VERUS_VIR_EXPORT file `{path}`: {err}")
+            });
+            bincode::serialize_into(
+                std::io::BufWriter::new(file),
+                &(
+                    "vermilion-vir-export-v1",
+                    self.vir_crate.as_ref().expect("vir_crate should be initialized"),
+                    self.crate_id.as_ref().expect("crate_id"),
+                    self.air_no_span.as_ref().expect("air_no_span should be initialized"),
+                    self.current_crate_modules.as_ref().expect("current_crate_modules"),
+                ),
+            )
+            .expect("cannot serialize VERUS_VIR_EXPORT");
+        }
+
         let result =
             if !self.args.no_verify { self.verify_crate_inner(&compiler, spans) } else { Ok(()) };
 
