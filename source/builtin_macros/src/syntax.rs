@@ -3361,6 +3361,67 @@ impl Visitor {
         self.inside_ghost -= 1;
     }
 
+    /// `debug_assert!(cond)` (and `debug_assert_eq!`/`debug_assert_ne!`)
+    /// in verified code becomes a statically checked `assert`: the
+    /// condition is a proof obligation discharged by the verifier and
+    /// erased at runtime, instead of an unsupported panic path. A trailing
+    /// format message, if any, is dropped (the assertion is static, so it
+    /// can never fire at runtime). Macros whose arguments fail to parse as
+    /// expressions are left untouched and keep today's behavior.
+    fn rewrite_debug_assert_stmt(&mut self, stmt: &mut Stmt) {
+        use verus_syn::parse::Parser;
+        if self.inside_ghost > 0 || self.inside_external_code > 0 {
+            return;
+        }
+        let Stmt::Macro(stmt_macro) = stmt else {
+            return;
+        };
+        if stmt_macro.mac.path.segments.len() != 1 {
+            return;
+        }
+        let Some(seg) = stmt_macro.mac.path.segments.last() else {
+            return;
+        };
+        let name = seg.ident.to_string();
+        if !matches!(name.as_str(), "debug_assert" | "debug_assert_eq" | "debug_assert_ne") {
+            return;
+        }
+        let span = seg.ident.span();
+        let parser =
+            verus_syn::punctuated::Punctuated::<Expr, verus_syn::token::Comma>::parse_terminated;
+        let Ok(args) = parser.parse2(stmt_macro.mac.tokens.clone()) else {
+            return;
+        };
+        let mut args = args.into_iter();
+        let cond = match name.as_str() {
+            "debug_assert" => match args.next() {
+                Some(cond) => cond,
+                None => return,
+            },
+            _ => {
+                let (Some(lhs), Some(rhs)) = (args.next(), args.next()) else {
+                    return;
+                };
+                if name == "debug_assert_eq" {
+                    Expr::Verbatim(quote_spanned!(span => ((#lhs) == (#rhs))))
+                } else {
+                    Expr::Verbatim(quote_spanned!(span => ((#lhs) != (#rhs))))
+                }
+            }
+        };
+        let mut cond = cond;
+        self.inside_ghost += 1;
+        self.visit_expr_mut(&mut cond);
+        self.inside_ghost -= 1;
+        let semi = stmt_macro.semi_token;
+        *stmt = Stmt::Expr(
+            Expr::Verbatim(
+                quote_spanned_builtin!(verus_builtin, span => #verus_builtin::assert_(#cond)),
+            ),
+            semi,
+        );
+    }
+
     fn desugar_for_loop(&mut self, for_loop: verus_syn::ExprForLoop) -> Expr {
         // The regular Rust for-loop doesn't give us direct access to the iterator,
         // which we need for writing invariants.
@@ -4145,6 +4206,7 @@ impl VisitMut for Visitor {
         }
         let block_stmts = std::mem::replace(&mut block.stmts, vec![]);
         for mut stmt in block_stmts {
+            self.rewrite_debug_assert_stmt(&mut stmt);
             let (skip, extra_stmts) = self.visit_stmt_extend(&mut stmt);
             if !skip {
                 stmts.push(stmt);
