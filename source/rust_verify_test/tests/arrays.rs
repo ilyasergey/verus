@@ -4,6 +4,94 @@ mod common;
 use common::*;
 
 test_verify_one_file! {
+    #[test] test_custom_index_mut verus_code! {
+        use vstd::prelude::*;
+
+        pub struct Grid(pub [u64; 4]);
+
+        impl core::ops::Index<(usize, usize)> for Grid {
+            type Output = u64;
+
+            fn index(&self, (x, y): (usize, usize)) -> (out: &u64)
+                ensures
+                    *out == self.0@[(2 * y + x) as int],
+            {
+                &self.0[2 * y + x]
+            }
+        }
+
+        impl vstd::std_specs::core::IndexSpecImpl<(usize, usize)> for Grid {
+            open spec fn index_req(&self, index: &(usize, usize)) -> bool {
+                index.0 < 2 && index.1 < 2
+            }
+        }
+
+        impl core::ops::IndexMut<(usize, usize)> for Grid {
+            fn index_mut(&mut self, (x, y): (usize, usize)) -> (out: &mut u64)
+                ensures
+                    *out == old(self).0@[(2 * y + x) as int],
+                    final(self).0@ == old(self).0@.update(
+                        (2 * y + x) as int,
+                        *final(out),
+                    ),
+            {
+                &mut self.0[2 * y + x]
+            }
+        }
+
+        fn set(grid: &mut Grid)
+            ensures
+                final(grid).0@ == old(grid).0@.update(3, 9),
+        {
+            grid[(1, 1)] = 9;
+            assert(grid.0@[3] == 9);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] test_custom_index_mut_out_of_bounds verus_code! {
+        use vstd::prelude::*;
+
+        pub struct Grid(pub [u64; 4]);
+
+        impl core::ops::Index<(usize, usize)> for Grid {
+            type Output = u64;
+
+            fn index(&self, (x, y): (usize, usize)) -> (out: &u64)
+                ensures
+                    *out == self.0@[(2 * y + x) as int],
+            {
+                &self.0[2 * y + x]
+            }
+        }
+
+        impl vstd::std_specs::core::IndexSpecImpl<(usize, usize)> for Grid {
+            open spec fn index_req(&self, index: &(usize, usize)) -> bool {
+                index.0 < 2 && index.1 < 2
+            }
+        }
+
+        impl core::ops::IndexMut<(usize, usize)> for Grid {
+            fn index_mut(&mut self, (x, y): (usize, usize)) -> (out: &mut u64)
+                ensures
+                    *out == old(self).0@[(2 * y + x) as int],
+                    final(self).0@ == old(self).0@.update(
+                        (2 * y + x) as int,
+                        *final(out),
+                    ),
+            {
+                &mut self.0[2 * y + x]
+            }
+        }
+
+        fn out_of_bounds(grid: &mut Grid) {
+            grid[(2, 1)] = 9; // FAILS
+        }
+    } => Err(e) => assert_one_fails(e)
+}
+
+test_verify_one_file! {
     #[test] test_unable_to_add_set_spec verus_code! {
         use vstd::prelude::*;
         use vstd::array::*;

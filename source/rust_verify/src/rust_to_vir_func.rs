@@ -30,11 +30,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::vec;
 use vir::ast::{
-    BodyVisibility, CrateId, DeclProph, ExprX, Fun, FunX, FunctionAttrsX, FunctionKind, FunctionX,
-    ItemKind, KrateX, Mode, OpaqueTypes, Opaqueness, ParamX, Path, PlaceX, StmtX, Typ,
+    ArmX, BodyVisibility, Constant, CrateId, DeclProph, Expr as VirExpr, ExprX, Exprs, Fun, FunX,
+    FunctionAttrsX, FunctionKind, FunctionX, HeaderExpr, HeaderExprX, ItemKind, KrateX, Mode,
+    OpaqueTypes, Opaqueness, ParamX, Path, Pattern, Place, PlaceX, SpannedTyped, StmtX, Typ,
     TypDecoration, TypX, VarIdent, VirErr, Visibility,
 };
-use vir::ast_util::{air_unique_var, unit_typ};
+use vir::ast_util::{air_unique_var, bool_typ, unit_typ};
 use vir::def::{RETURN_VALUE, Spanned, VERUS_SPEC};
 use vir::sst_util::subst_typ;
 
@@ -350,6 +351,7 @@ fn body_to_vir<'tcx>(
     // parameter shape, while every binding introduced by the source pattern is
     // in scope for the translated body.
     let mut pattern_decls = Vec::new();
+    let mut parameter_patterns: Vec<(Pattern, Place)> = Vec::new();
     assert!(body.params.len() == parameter_names.len());
     for (param, name) in body.params.iter().zip(parameter_names) {
         if matches!(param.pat.kind, PatKind::Binding(_, _, _, None)) {
@@ -358,6 +360,7 @@ fn body_to_vir<'tcx>(
         let pattern = pattern_to_vir(&bctx, param.pat)?;
         let place = bctx.spanned_typed_new(param.pat.span, &pattern.typ, PlaceX::Local(name));
         bctx.ctxt.erasure_info.borrow_mut().hir_vir_ids.push((param.pat.hir_id, place.span.id));
+        parameter_patterns.push((pattern.clone(), place.clone()));
         pattern_decls.push(bctx.spanned_new(
             param.pat.span,
             StmtX::Decl {
@@ -369,10 +372,25 @@ fn body_to_vir<'tcx>(
         ));
     }
     if !pattern_decls.is_empty() {
+        e = bind_parameter_patterns_in_headers(&e, &parameter_patterns);
         e = match &e.x {
             ExprX::Block(stmts, tail) => {
-                pattern_decls.extend(stmts.iter().cloned());
-                e.new_x(ExprX::Block(Arc::new(pattern_decls), tail.clone()))
+                // Contract headers must remain the first statements so
+                // `read_header` can extract them. The pattern bindings are
+                // entry declarations semantically, but syntactically follow
+                // the temporary header nodes until extraction removes those
+                // nodes from the executable body.
+                let header_len = stmts
+                    .iter()
+                    .take_while(|stmt| {
+                        matches!(&stmt.x, StmtX::Expr(expr) if matches!(&expr.x, ExprX::Header(_)))
+                    })
+                    .count();
+                let mut with_patterns = Vec::with_capacity(stmts.len() + pattern_decls.len());
+                with_patterns.extend(stmts[..header_len].iter().cloned());
+                with_patterns.extend(pattern_decls);
+                with_patterns.extend(stmts[header_len..].iter().cloned());
+                e.new_x(ExprX::Block(Arc::new(with_patterns), tail.clone()))
             }
             _ => e.new_x(ExprX::Block(Arc::new(pattern_decls), Some(e.clone()))),
         };
@@ -386,6 +404,95 @@ fn body_to_vir<'tcx>(
     } else {
         Ok(e)
     }
+}
+
+fn bind_parameter_patterns_in_expr(
+    expr: &VirExpr,
+    parameter_patterns: &[(Pattern, Place)],
+) -> VirExpr {
+    let mut bound = expr.clone();
+    for (pattern, place) in parameter_patterns.iter().rev() {
+        let guard =
+            SpannedTyped::new(&pattern.span, &bool_typ(), ExprX::Const(Constant::Bool(true)));
+        let arm = Spanned::new(
+            pattern.span.clone(),
+            ArmX { pattern: pattern.clone(), guard, body: bound },
+        );
+        bound = SpannedTyped::new(
+            &expr.span,
+            &expr.typ,
+            ExprX::Match(place.clone(), Arc::new(vec![arm])),
+        );
+    }
+    bound
+}
+
+fn bind_parameter_patterns_in_exprs(
+    exprs: &Exprs,
+    parameter_patterns: &[(Pattern, Place)],
+) -> Exprs {
+    Arc::new(
+        exprs
+            .iter()
+            .map(|expr| bind_parameter_patterns_in_expr(expr, parameter_patterns))
+            .collect(),
+    )
+}
+
+fn bind_parameter_patterns_in_header(
+    header: &HeaderExpr,
+    parameter_patterns: &[(Pattern, Place)],
+) -> HeaderExpr {
+    let bind = |expr: &VirExpr| bind_parameter_patterns_in_expr(expr, parameter_patterns);
+    let binds = |exprs: &Exprs| bind_parameter_patterns_in_exprs(exprs, parameter_patterns);
+    Arc::new(match &**header {
+        HeaderExprX::UnwrapParameter(x) => HeaderExprX::UnwrapParameter(x.clone()),
+        HeaderExprX::NoMethodBody => HeaderExprX::NoMethodBody,
+        HeaderExprX::Requires(exprs) => HeaderExprX::Requires(binds(exprs)),
+        HeaderExprX::Ensures(id_typ, (exprs, default_exprs)) => {
+            HeaderExprX::Ensures(id_typ.clone(), (binds(exprs), binds(default_exprs)))
+        }
+        HeaderExprX::Returns(expr) => HeaderExprX::Returns(bind(expr)),
+        HeaderExprX::Recommends(exprs) => HeaderExprX::Recommends(binds(exprs)),
+        HeaderExprX::InvariantExceptBreak(exprs) => HeaderExprX::InvariantExceptBreak(binds(exprs)),
+        HeaderExprX::Invariant(exprs) => HeaderExprX::Invariant(binds(exprs)),
+        HeaderExprX::Decreases(exprs) => HeaderExprX::Decreases(binds(exprs)),
+        HeaderExprX::DecreasesWhen(expr) => HeaderExprX::DecreasesWhen(bind(expr)),
+        HeaderExprX::DecreasesBy(fun) => HeaderExprX::DecreasesBy(fun.clone()),
+        HeaderExprX::InvariantOpens(span, exprs) => {
+            HeaderExprX::InvariantOpens(span.clone(), binds(exprs))
+        }
+        HeaderExprX::InvariantOpensExcept(span, exprs) => {
+            HeaderExprX::InvariantOpensExcept(span.clone(), binds(exprs))
+        }
+        HeaderExprX::InvariantOpensSet(expr) => HeaderExprX::InvariantOpensSet(bind(expr)),
+        HeaderExprX::Hide(fun) => HeaderExprX::Hide(fun.clone()),
+        HeaderExprX::ExtraDependency(fun) => HeaderExprX::ExtraDependency(fun.clone()),
+        HeaderExprX::NoUnwind => HeaderExprX::NoUnwind,
+        HeaderExprX::NoUnwindWhen(expr) => HeaderExprX::NoUnwindWhen(bind(expr)),
+        HeaderExprX::OpenVisibilityQualifier(visibility) => {
+            HeaderExprX::OpenVisibilityQualifier(visibility.clone())
+        }
+    })
+}
+
+fn bind_parameter_patterns_in_headers(
+    body: &VirExpr,
+    parameter_patterns: &[(Pattern, Place)],
+) -> VirExpr {
+    let ExprX::Block(stmts, tail) = &body.x else { return body.clone() };
+    let stmts = stmts
+        .iter()
+        .map(|stmt| {
+            let StmtX::Expr(expr) = &stmt.x else { return stmt.clone() };
+            let ExprX::Header(header) = &expr.x else { return stmt.clone() };
+            stmt.new_x(StmtX::Expr(expr.new_x(ExprX::Header(bind_parameter_patterns_in_header(
+                header,
+                parameter_patterns,
+            )))))
+        })
+        .collect();
+    body.new_x(ExprX::Block(Arc::new(stmts), tail.clone()))
 }
 
 pub(crate) fn extract_desugared_async_body<'tcx>(

@@ -5,15 +5,22 @@ use common::*;
 
 test_verify_one_file! {
     #[test] function_parameter_tuple_patterns verus_code! {
-        fn first((x, _): (u64, u64)) -> u64 {
+        fn first((x, _): (u64, u64)) -> (r: u64)
+            requires x < 10,
+            ensures r == x,
+        {
             x
         }
 
-        fn nested((x, (y, z)): (u64, (u64, u64))) -> (u64, u64, u64) {
+        fn nested((x, (y, z)): (u64, (u64, u64))) -> (r: (u64, u64, u64))
+            ensures r == (x, y, z),
+        {
             (x, y, z)
         }
 
-        fn mutable_binding((mut x, y): (u64, u64)) -> u64 {
+        fn mutable_binding((mut x, y): (u64, u64)) -> (r: u64)
+            ensures r == y,
+        {
             x = y;
             x
         }
@@ -21,7 +28,9 @@ test_verify_one_file! {
         struct UsesTupleMethod;
 
         impl UsesTupleMethod {
-            fn second(&self, (_, y): (u64, u64)) -> u64 {
+            fn second(&self, (_, y): (u64, u64)) -> (r: u64)
+                ensures r == y,
+            {
                 y
             }
         }

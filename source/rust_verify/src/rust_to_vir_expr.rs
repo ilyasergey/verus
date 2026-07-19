@@ -66,7 +66,7 @@ use crate::rust_to_vir_base::{
     typ_of_node_unadjusted,
 };
 use crate::rust_to_vir_ctor::{resolve_braces_ctor, resolve_ctor};
-use crate::util::{err_span, err_span_bare, slice_vec_map_result, vec_map_result};
+use crate::util::{err_span, slice_vec_map_result, vec_map_result};
 use crate::verus_items::{
     self, CompilableOprItem, DummyCaptureItem, InvariantItem, OpenInvariantBlockItem, RustItem,
     SpecGhostTrackedItem, UnaryOpItem, VerusItem, VstdItem,
@@ -3064,14 +3064,6 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                         ),
                     };
                     Some((fun, typ_args))
-                } else if mutbl {
-                    return Err(err_span_bare(
-                        expr.span,
-                        format!("IndexMut operator not supported for ({:}, {:})", tgt_ty, idx_ty),
-                    )
-                    .help(
-                        "At present, the IndexMut operator is only supported for (Vec<_>, usize)",
-                    ));
                 } else {
                     None
                 };
@@ -3093,12 +3085,21 @@ pub(crate) fn expr_to_vir_innermost<'tcx>(
                         call_target_attrs,
                     )
                 } else {
-                    // general Index trait case
+                    // general Index/IndexMut trait case
                     let (impl_paths, target_kind) =
-                        resolve_index_call(bctx, *tgt_ty, idx_ty, false, expr.span)?;
-                    let typ_args =
-                        Arc::new(vec![undecorate_typ(&tgt_vir.typ), idx_vir.typ.clone()]);
-                    let fun = vir::fun!(CrateId::Core => "ops", "index", "Index", "index");
+                        resolve_index_call(bctx, *tgt_ty, idx_ty, mutbl, expr.span)?;
+                    // The trait's `Self` is the indexed value, not the reference
+                    // Rust inserts for the `&self`/`&mut self` receiver.  In
+                    // particular, a mutable receiver is represented in VIR as
+                    // `TypX::MutRef`, which `undecorate_typ` intentionally does
+                    // not strip.
+                    let self_typ = bctx.mid_ty_to_vir(expr.span, tgt_ty)?;
+                    let typ_args = Arc::new(vec![self_typ, idx_vir.typ.clone()]);
+                    let fun = if mutbl {
+                        vir::fun!(CrateId::Core => "ops", "index", "IndexMut", "index_mut")
+                    } else {
+                        vir::fun!(CrateId::Core => "ops", "index", "Index", "index")
+                    };
                     CallTarget::Fun(target_kind, fun, typ_args, impl_paths, call_target_attrs)
                 };
 

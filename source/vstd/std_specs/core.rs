@@ -60,6 +60,11 @@ pub trait ExIndex<Idx> where Idx: ?Sized {
 #[verifier::external_trait_specification]
 pub trait ExIndexMut<Idx>: core::ops::Index<Idx> where Idx: ?Sized {
     type ExternalTraitSpecificationFor: core::ops::IndexMut<Idx>;
+
+    fn index_mut(&mut self, index: Idx) -> (output: &mut Self::Output)
+        where Idx: Sized, Self: IndexSpec<Idx>
+        requires
+            <Self as IndexSpec<Idx>>::index_req(old(self), &index);
 }
 
 #[verifier::external_trait_specification]

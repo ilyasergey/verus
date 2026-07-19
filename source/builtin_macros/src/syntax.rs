@@ -540,8 +540,8 @@ impl Visitor {
         // function name
         fn_ident: &Ident,
         generics: Option<impl ToTokens>,
-        inputs: (Option<impl ToTokens>, impl ToTokens), // optional self and args
-        is_async_fn: bool,                              // is the function an async function
+        inputs: (Option<impl ToTokens>, impl ToTokens, bool), // optional self, args, wildcard flag
+        is_async_fn: bool,                                    // is the function an async function
     ) -> Vec<Stmt> {
         let requires = self.take_ghost(&mut spec.requires);
         let recommends = self.take_ghost(&mut spec.recommends);
@@ -552,7 +552,7 @@ impl Visitor {
         let opens_invariants = self.take_ghost(&mut spec.invariants);
         let unwind = self.take_ghost(&mut spec.unwind);
 
-        let (self_token_op, args) = inputs;
+        let (self_token_op, args, args_contain_wildcard) = inputs;
 
         // Either the single identifier in the return pattern, or a fresh identifier.
         let ret_val_ident: &Ident = match ret_pat {
@@ -727,12 +727,17 @@ impl Visitor {
                                 }
                             };
                             let contrain_typ_expr = Expr::Verbatim(constrain_type);
+                            let allow_unreachable = args_contain_wildcard
+                                .then(|| quote_spanned!(token.span => #[allow(unreachable_code)]));
                             spec_stmts.push(Stmt::Expr(
-                                    Expr::Verbatim(
-                                        quote_spanned_builtin!(verus_builtin, token.span => #verus_builtin::ensures(|#ret_val_ident| [#contrain_typ_expr, #exprs])),
+                                Expr::Verbatim(
+                                    quote_spanned_builtin!(verus_builtin, token.span =>
+                                        #allow_unreachable
+                                        #verus_builtin::ensures(|#ret_val_ident| [#contrain_typ_expr, #exprs])
                                     ),
-                                    Some(Semi { spans: [token.span] }),
-                                ));
+                                ),
+                                Some(Semi { spans: [token.span] }),
+                            ));
                         }
                     } else {
                         spec_stmts.push(Stmt::Expr(
@@ -5111,56 +5116,117 @@ fn take_sig_with_spec(
     spec_stmts
 }
 
+fn verus_input_pat_to_expr(pat: &Pat) -> Option<(Expr, bool)> {
+    match pat {
+        Pat::Ident(pat_ident) => Some((Expr::Verbatim(pat_ident.ident.to_token_stream()), false)),
+        Pat::Tuple(pat_tuple) => {
+            let mut elems = Punctuated::new();
+            let mut contains_wildcard = false;
+            for pat in &pat_tuple.elems {
+                let (expr, element_contains_wildcard) = verus_input_pat_to_expr(pat)?;
+                elems.push(expr);
+                contains_wildcard |= element_contains_wildcard;
+            }
+            Some((
+                Expr::Tuple(ExprTuple { attrs: vec![], paren_token: pat_tuple.paren_token, elems }),
+                contains_wildcard,
+            ))
+        }
+        Pat::Paren(pat_paren) => verus_input_pat_to_expr(&pat_paren.pat),
+        // This expression is used only as the erased second argument of
+        // `constrain_type`, so a wildcard needs a value of the inferred type
+        // but never needs to be evaluated or translated to VIR.
+        Pat::Wild(_) => {
+            Some((Expr::Verbatim(quote_spanned!(pat.span() => ::core::unimplemented!())), true))
+        }
+        _ => None,
+    }
+}
+
+fn input_pat_to_expr(pat: &syn::Pat) -> Option<(Expr, bool)> {
+    match pat {
+        syn::Pat::Ident(pat_ident) => {
+            Some((Expr::Verbatim(pat_ident.ident.to_token_stream()), false))
+        }
+        syn::Pat::Tuple(pat_tuple) => {
+            let mut elems = Punctuated::new();
+            let mut contains_wildcard = false;
+            for pat in &pat_tuple.elems {
+                let (expr, element_contains_wildcard) = input_pat_to_expr(pat)?;
+                elems.push(expr);
+                contains_wildcard |= element_contains_wildcard;
+            }
+            Some((
+                Expr::Tuple(ExprTuple {
+                    attrs: vec![],
+                    paren_token: Paren(pat_tuple.paren_token.span),
+                    elems,
+                }),
+                contains_wildcard,
+            ))
+        }
+        syn::Pat::Paren(pat_paren) => input_pat_to_expr(&pat_paren.pat),
+        syn::Pat::Wild(_) => {
+            Some((Expr::Verbatim(quote_spanned!(pat.span() => ::core::unimplemented!())), true))
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn verus_inputs_to_tokens(
     inputs: &Punctuated<FnArg, Token![,]>,
-) -> (Option<TokenStream>, TokenStream) {
+) -> (Option<TokenStream>, TokenStream, bool) {
     let mut arg_tokens = TokenStream::new();
     let mut args: Punctuated<verus_syn::Expr, Comma> = Punctuated::new();
     let mut self_token = None;
+    let mut contains_wildcard = false;
     for input in inputs.iter() {
         match (&input.tracked, &input.kind) {
             (_, FnArgKind::Receiver(receiver)) => {
                 self_token = Some(receiver.self_token.clone().to_token_stream());
             }
-            (_, FnArgKind::Typed(pat_type)) => match &*pat_type.pat {
-                Pat::Ident(pat_ident) => {
-                    args.push(Expr::Verbatim(pat_ident.ident.to_token_stream()));
-                }
-                _ => {
+            (_, FnArgKind::Typed(pat_type)) => {
+                if let Some((expr, pattern_contains_wildcard)) =
+                    verus_input_pat_to_expr(&pat_type.pat)
+                {
+                    args.push(expr);
+                    contains_wildcard |= pattern_contains_wildcard;
+                } else {
                     args.push(Expr::Verbatim(quote_spanned!(input.span() =>
-                            compile_error!("verus! macro error: input of the function is not an Ident"))));
+                            compile_error!("verus! macro error: unsupported function-parameter pattern in a contracted function"))));
                 }
-            },
+            }
         }
     }
     args.to_tokens(&mut arg_tokens);
-    (self_token, arg_tokens)
+    (self_token, arg_tokens, contains_wildcard)
 }
 
 pub(crate) fn inputs_to_tokens(
     inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::Token![,]>,
-) -> (Option<TokenStream>, TokenStream) {
+) -> (Option<TokenStream>, TokenStream, bool) {
     let mut ret = TokenStream::new();
     let mut args: Punctuated<verus_syn::Expr, Comma> = Punctuated::new();
     let mut self_token = None;
+    let mut contains_wildcard = false;
     for input in inputs.iter() {
         match input {
             syn::FnArg::Receiver(receiver) => {
                 self_token = Some(receiver.self_token.clone().to_token_stream());
             }
-            syn::FnArg::Typed(pat_type) => match &*pat_type.pat {
-                syn::Pat::Ident(pat_ident) => {
-                    args.push(Expr::Verbatim(pat_ident.ident.to_token_stream()));
-                }
-                _ => {
+            syn::FnArg::Typed(pat_type) => {
+                if let Some((expr, pattern_contains_wildcard)) = input_pat_to_expr(&pat_type.pat) {
+                    args.push(expr);
+                    contains_wildcard |= pattern_contains_wildcard;
+                } else {
                     args.push(Expr::Verbatim(quote_spanned!(input.span() =>
-                            compile_error!("verus! macro error: input of the function is not an Ident"))));
+                            compile_error!("verus! macro error: unsupported function-parameter pattern in a contracted function"))));
                 }
-            },
+            }
         }
     }
     args.to_tokens(&mut ret);
-    (self_token, ret)
+    (self_token, ret, contains_wildcard)
 }
 
 pub(crate) fn verus_generic_to_tokens(generic: &Generics) -> Option<TokenStream> {
