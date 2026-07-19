@@ -242,6 +242,16 @@ pub closed spec fn spec_u64_from_le_bytes(s: Seq<u8>) -> u64
     (s[7] as u64) << 56
 }
 
+pub assume_specification[ u64::to_le_bytes ](x: u64) -> (s: [u8; 8])
+    ensures
+        s@ == spec_u64_to_le_bytes(x),
+;
+
+pub assume_specification[ u64::from_le_bytes ](s: [u8; 8]) -> (x: u64)
+    ensures
+        x == spec_u64_from_le_bytes(s@),
+;
+
 #[verifier::spinoff_prover]
 pub proof fn lemma_auto_spec_u64_to_from_le_bytes()
     ensures

@@ -19,8 +19,8 @@ use rustc_hir::{
 use rustc_middle::hir::Crate;
 use rustc_middle::ty::{
     AdtDef, BoundRegion, BoundRegionKind, BoundVar, Clause, ClauseKind, ConstKind, GenericArg,
-    GenericArgKind, GenericArgsRef, Region, RegionKind, TyCtxt, TyKind, TypingEnv, ValTreeKind,
-    Value,
+    GenericArgKind, GenericArgsRef, Region, RegionKind, TyCtxt, TyKind, TypingEnv, TypingMode,
+    ValTreeKind, Value,
 };
 use rustc_mir_build_verus::verus::BodyErasure;
 use rustc_span::Span;
@@ -757,6 +757,20 @@ fn compare_clause_kind<'tcx>(
         _ => false,
     }
 }
+fn normalize_external_const<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    cnst: &rustc_middle::ty::Const<'tcx>,
+) -> rustc_middle::ty::Const<'tcx> {
+    match cnst.kind() {
+        ConstKind::Unevaluated(unevaluated) => {
+            let typing_env =
+                TypingEnv::new(tcx.param_env(unevaluated.def), TypingMode::PostAnalysis);
+            tcx.normalize_erasing_regions(typing_env, cnst.clone())
+        }
+        _ => cnst.clone(),
+    }
+}
+
 fn compare_external_ty<'tcx>(
     tcx: TyCtxt<'tcx>,
     verus_items: &crate::verus_items::VerusItems,
@@ -848,7 +862,7 @@ fn compare_external_ty<'tcx>(
                 rustc_middle::ty::TyKind::Array(ty1, const1),
                 rustc_middle::ty::TyKind::Array(ty2, const2),
             ) => {
-                const1 == const2
+                normalize_external_const(tcx, const1) == normalize_external_const(tcx, const2)
                     && compare_external_ty(tcx, verus_items, &ty1, &ty2, external_trait_from_to)
             }
             (
