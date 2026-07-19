@@ -52,6 +52,17 @@ macro_rules! wrapping_specs {
                     x >> (shift % $bits)
                 }
 
+                /// Rotate `x` left by `shift`, using Rust's modulo-width
+                /// interpretation of the shift count.
+                pub open spec fn rotate_left(x: $uN, shift: u32) -> $uN {
+                    let shift = shift % $bits;
+                    if shift == 0 {
+                        x
+                    } else {
+                        (x << shift) | (x >> ($bits - shift))
+                    }
+                }
+
             }
             pub mod $modname_i {
                 use super::*;

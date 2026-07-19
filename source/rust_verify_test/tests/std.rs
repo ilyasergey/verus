@@ -228,6 +228,46 @@ test_verify_one_file! {
 }
 
 test_verify_one_file_with_options! {
+    #[test] unsigned_rotate_left ["--compile"] => verus_code! {
+        use vstd::wrapping::u64_specs;
+
+        fn rotate(x: u64, shift: u32) -> (result: u64)
+            ensures result == u64_specs::rotate_left(x, shift),
+        {
+            x.rotate_left(shift)
+        }
+
+        fn test() {
+            let r0 = rotate(0x0123_4567_89ab_cdef, 0);
+            assert(r0 == 0x0123_4567_89ab_cdef);
+            let r4 = rotate(0x0123_4567_89ab_cdef, 4);
+            assert(u64_specs::rotate_left(0x0123_4567_89ab_cdef, 4)
+                == 0x1234_5678_9abc_def0) by (bit_vector);
+            assert(r4 == 0x1234_5678_9abc_def0);
+            let r63 = rotate(1, 63);
+            assert(u64_specs::rotate_left(1, 63) == 0x8000_0000_0000_0000) by (bit_vector);
+            assert(r63 == 0x8000_0000_0000_0000);
+            let r64 = rotate(1, 64);
+            assert(r64 == 1);
+            let r129 = rotate(1, 129);
+            assert(u64_specs::rotate_left(1, 129) == 2) by (bit_vector);
+            assert(r129 == 2);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] unsigned_rotate_left_wrong verus_code! {
+        use vstd::prelude::*;
+
+        fn test() {
+            let result = 1u64.rotate_left(1);
+            assert(result == 1); // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+test_verify_one_file_with_options! {
     #[test] question_mark_option ["exec_allows_no_decreases_clause"] => verus_code! {
         use vstd::*;
 
