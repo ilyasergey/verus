@@ -4,7 +4,7 @@ use super::core::{IndexSetTrustedSpec, IndexSpec, TrustedSpecSealed};
 use super::iter::IteratorSpec;
 use super::range::{slice_range_end, slice_range_start, slice_range_valid};
 
-use core::ops::{Index, Range, RangeFrom};
+use core::ops::{Index, IndexMut, Range, RangeFrom};
 use core::slice::{Iter, SliceIndex};
 
 use verus as verus_;
@@ -46,6 +46,15 @@ pub assume_specification<T>[ <usize as SliceIndex<[T]>>::index ](i: usize, slice
         slice@[i as int],
 ;
 
+pub assume_specification<T>[ <usize as SliceIndex<[T]>>::index_mut ](
+    i: usize,
+    slice: &mut [T],
+) -> (r: &mut T)
+    ensures
+        *r == old(slice)@[i as int],
+        final(slice)@ == old(slice)@.update(i as int, *final(r)),
+;
+
 impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for Range<usize> {
     open spec fn index_req(&self, slice: &[T]) -> bool {
         &&& self.start <= self.end
@@ -69,6 +78,26 @@ pub assume_specification<T>[ <RangeFrom<usize> as SliceIndex<[T]>>::index ](i: R
         r@ == slice@.subrange(i.start as int, slice@.len() as int),
 ;
 
+pub assume_specification<T>[ <Range<usize> as SliceIndex<[T]>>::index_mut ](
+    i: Range<usize>,
+    slice: &mut [T],
+) -> (r: &mut [T])
+    ensures
+        r@ == old(slice)@.subrange(i.start as int, i.end as int),
+        final(slice)@ == old(slice)@.subrange(0, i.start as int)
+            + final(r)@
+            + old(slice)@.subrange(i.end as int, old(slice)@.len() as int),
+;
+
+pub assume_specification<T>[ <RangeFrom<usize> as SliceIndex<[T]>>::index_mut ](
+    i: RangeFrom<usize>,
+    slice: &mut [T],
+) -> (r: &mut [T])
+    ensures
+        r@ == old(slice)@.subrange(i.start as int, old(slice)@.len() as int),
+        final(slice)@ == old(slice)@.subrange(0, i.start as int) + final(r)@,
+;
+
 impl<T, I: SliceIndex<[T]>> super::core::IndexSpecImpl<I> for [T] {
     open spec fn index_req(&self, index: &I) -> bool {
         index.index_req(self)
@@ -89,6 +118,14 @@ pub assume_specification<T, I: SliceIndex<[T]>> [<[T] as Index<I>>::index] (
 ) -> (output: &<I as core::slice::SliceIndex<[T]>>::Output)
     ensures
         call_ensures(<I as SliceIndex<[T]>>::index, (index, slice), output),
+;
+
+pub assume_specification<T, I: SliceIndex<[T]>> [<[T] as IndexMut<I>>::index_mut] (
+    slice: &mut [T],
+    index: I,
+) -> (output: &mut <I as core::slice::SliceIndex<[T]>>::Output)
+    ensures
+        call_ensures(<I as SliceIndex<[T]>>::index_mut, (index, slice), output),
 ;
 
 pub assume_specification<T, I, const N: usize> [<[T; N] as Index<I>>::index] (

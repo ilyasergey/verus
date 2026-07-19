@@ -264,6 +264,56 @@ test_verify_one_file! {
 }
 
 test_verify_one_file! {
+    #[test] test_slice_mutable_ranges_and_copy verus_code! {
+        use vstd::prelude::*;
+
+        fn range(dst: &mut [u8], src: &[u8])
+            requires
+                old(dst)@.len() == 5,
+                src@.len() == 2,
+            ensures
+                final(dst)@ == old(dst)@.subrange(0, 1)
+                    + src@
+                    + old(dst)@.subrange(3, 5),
+        {
+            dst[1..3].copy_from_slice(src);
+        }
+
+        fn range_from(dst: &mut [u8], src: &[u8])
+            requires
+                old(dst)@.len() == 5,
+                src@.len() == 2,
+            ensures
+                final(dst)@ == old(dst)@.subrange(0, 3) + src@,
+        {
+            dst[3..].copy_from_slice(src);
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] test_slice_mutable_ranges_and_copy_failures verus_code! {
+        use vstd::prelude::*;
+
+        fn range_bounds(dst: &mut [u8], src: &[u8])
+            requires
+                old(dst)@.len() == 5,
+                src@.len() == 2,
+        {
+            dst[4..6].copy_from_slice(src); // FAILS: range is out of bounds
+        }
+
+        fn range_from_len(dst: &mut [u8], src: &[u8])
+            requires
+                old(dst)@.len() == 5,
+                src@.len() == 3,
+        {
+            dst[3..].copy_from_slice(src); // FAILS: lengths differ
+        }
+    } => Err(err) => assert_fails(err, 3)
+}
+
+test_verify_one_file! {
     #[test] test_array_index verus_code! {
         use std::ops::Index;
         use vstd::prelude::*;
