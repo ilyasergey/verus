@@ -8,13 +8,13 @@ use crate::rust_to_vir_base::{
     no_body_param_to_var,
 };
 use crate::rust_to_vir_base::{mk_visibility, qpath_to_ident};
-use crate::rust_to_vir_expr::{expr_to_vir_consume, pat_to_mut_var};
+use crate::rust_to_vir_expr::{expr_to_vir_consume, pat_to_mut_var, pattern_to_vir};
 use crate::util::{err_span, err_span_bare};
 use crate::verus_items::{BuiltinTypeItem, VerusItem};
 use crate::{unsupported_err, unsupported_err_unless};
 use rustc_hir::{
     Attribute, Body, BodyId, Expr, ExprKind, FnDecl, FnHeader, FnSig, Generics, HeaderSafety,
-    HirId, MaybeOwner, Param, Safety,
+    HirId, MaybeOwner, Param, PatKind, Safety,
 };
 use rustc_middle::hir::Crate;
 use rustc_middle::ty::{
@@ -30,9 +30,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::vec;
 use vir::ast::{
-    BodyVisibility, CrateId, Fun, FunX, FunctionAttrsX, FunctionKind, FunctionX, ItemKind, KrateX,
-    Mode, OpaqueTypes, Opaqueness, ParamX, Path, Typ, TypDecoration, TypX, VarIdent, VirErr,
-    Visibility,
+    BodyVisibility, CrateId, DeclProph, ExprX, Fun, FunX, FunctionAttrsX, FunctionKind, FunctionX,
+    ItemKind, KrateX, Mode, OpaqueTypes, Opaqueness, ParamX, Path, PlaceX, StmtX, Typ,
+    TypDecoration, TypX, VarIdent, VirErr, Visibility,
 };
 use vir::ast_util::{air_unique_var, unit_typ};
 use vir::def::{RETURN_VALUE, Spanned, VERUS_SPEC};
@@ -327,6 +327,7 @@ fn body_to_vir<'tcx>(
     external_opaque_type_map: Option<HashMap<Path, Path>>,
     is_async: bool,
 ) -> Result<vir::ast::Expr, VirErr> {
+    let parameter_names = param_names.clone();
     let bctx = mk_bctx(
         ctxt,
         fun_id,
@@ -340,7 +341,42 @@ fn body_to_vir<'tcx>(
     );
     let body_expr =
         if is_async { extract_desugared_async_body(&bctx.ctxt, body)? } else { &body.value };
-    let e = expr_to_vir_consume(&bctx, body_expr)?;
+    let mut e = expr_to_vir_consume(&bctx, body_expr)?;
+
+    // VIR function signatures bind variables rather than general patterns.
+    // Keep one synthetic parameter for each Rust parameter pattern, then
+    // reproduce Rust's entry-time destructuring as declarations at the start
+    // of the VIR body. Calls therefore retain their original one-argument-per-
+    // parameter shape, while every binding introduced by the source pattern is
+    // in scope for the translated body.
+    let mut pattern_decls = Vec::new();
+    assert!(body.params.len() == parameter_names.len());
+    for (param, name) in body.params.iter().zip(parameter_names) {
+        if matches!(param.pat.kind, PatKind::Binding(_, _, _, None)) {
+            continue;
+        }
+        let pattern = pattern_to_vir(&bctx, param.pat)?;
+        let place = bctx.spanned_typed_new(param.pat.span, &pattern.typ, PlaceX::Local(name));
+        bctx.ctxt.erasure_info.borrow_mut().hir_vir_ids.push((param.pat.hir_id, place.span.id));
+        pattern_decls.push(bctx.spanned_new(
+            param.pat.span,
+            StmtX::Decl {
+                pattern,
+                mode: Some((mode, DeclProph::Default)),
+                init: Some(place),
+                els: None,
+            },
+        ));
+    }
+    if !pattern_decls.is_empty() {
+        e = match &e.x {
+            ExprX::Block(stmts, tail) => {
+                pattern_decls.extend(stmts.iter().cloned());
+                e.new_x(ExprX::Block(Arc::new(pattern_decls), tail.clone()))
+            }
+            _ => e.new_x(ExprX::Block(Arc::new(pattern_decls), Some(e.clone()))),
+        };
+    }
 
     if external_body {
         match &e.x {
@@ -1649,8 +1685,12 @@ pub(crate) fn check_item_fn<'tcx>(
             let body = find_body(ctxt, body_id);
             let Body { params, value: _ } = body;
             let mut ps = Vec::new();
-            for Param { hir_id, pat, ty_span: _, span } in params.iter() {
-                let (is_mut_var, name) = pat_to_mut_var(pat)?;
+            for (index, Param { hir_id, pat, ty_span: _, span }) in params.iter().enumerate() {
+                let (is_mut_var, name) = if matches!(pat.kind, PatKind::Binding(_, _, _, None)) {
+                    pat_to_mut_var(pat)?
+                } else {
+                    (false, air_unique_var(&format!("__verus_param_{index}")))
+                };
                 // is_mut_var: means a parameter is like `mut x: X`
                 // is_mut: means a parameter is like `x: &mut X` or `x: Tracked<&mut X>`
                 ps.push((name, *span, Some(*hir_id), is_mut_var));

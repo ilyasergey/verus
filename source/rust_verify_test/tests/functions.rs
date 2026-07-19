@@ -4,6 +4,38 @@ mod common;
 use common::*;
 
 test_verify_one_file! {
+    #[test] function_parameter_tuple_patterns verus_code! {
+        fn first((x, _): (u64, u64)) -> u64 {
+            x
+        }
+
+        fn nested((x, (y, z)): (u64, (u64, u64))) -> (u64, u64, u64) {
+            (x, y, z)
+        }
+
+        fn mutable_binding((mut x, y): (u64, u64)) -> u64 {
+            x = y;
+            x
+        }
+
+        struct UsesTupleMethod;
+
+        impl UsesTupleMethod {
+            fn second(&self, (_, y): (u64, u64)) -> u64 {
+                y
+            }
+        }
+
+        fn calls() {
+            let _ = first((1, 2));
+            let _ = nested((1, (2, 3)));
+            let _ = mutable_binding((1, 2));
+            let _ = UsesTupleMethod.second((1, 2));
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
     #[test] test_use_fun_ext verus_code! {
         proof fn test_use_fun_ext(f: spec_fn(int) -> int) {
             assert((|i: int| i + 1) =~= (|i: int| 1 + i));
