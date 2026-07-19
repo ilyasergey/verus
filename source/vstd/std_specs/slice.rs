@@ -4,7 +4,7 @@ use super::core::{IndexSetTrustedSpec, IndexSpec, TrustedSpecSealed};
 use super::iter::IteratorSpec;
 use super::range::{slice_range_end, slice_range_start, slice_range_valid};
 
-use core::ops::{Index, Range};
+use core::ops::{Index, Range, RangeFrom};
 use core::slice::{Iter, SliceIndex};
 
 use verus as verus_;
@@ -56,6 +56,17 @@ impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for Range<usize> {
 pub assume_specification<T>[ <Range<usize> as SliceIndex<[T]>>::index ](i: Range<usize>, slice: &[T]) -> (r: &[T])
     ensures
         r@ == slice@.subrange(i.start as int, i.end as int),
+;
+
+impl<T> super::super::slice::SliceIndexSpecImpl<[T]> for RangeFrom<usize> {
+    open spec fn index_req(&self, slice: &[T]) -> bool {
+        self.start <= slice@.len()
+    }
+}
+
+pub assume_specification<T>[ <RangeFrom<usize> as SliceIndex<[T]>>::index ](i: RangeFrom<usize>, slice: &[T]) -> (r: &[T])
+    ensures
+        r@ == slice@.subrange(i.start as int, slice@.len() as int),
 ;
 
 impl<T, I: SliceIndex<[T]>> super::core::IndexSpecImpl<I> for [T] {

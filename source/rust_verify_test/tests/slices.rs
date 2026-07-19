@@ -228,6 +228,42 @@ test_verify_one_file! {
 }
 
 test_verify_one_file! {
+    #[test] test_slice_range_from verus_code! {
+        use std::ops::Index;
+        use vstd::prelude::*;
+
+        fn range_from(s: &[u8]) {
+            assume(s.len() == 5);
+            let x = &s[1..];
+            assert(x@ == s@.subrange(1, 5));
+        }
+
+        fn range_from_index(s: &[u8]) {
+            assume(s.len() == 5);
+            let x = s.index(1..);
+            assert(x@ == s@.subrange(1, 5));
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] test_slice_range_from_failures verus_code! {
+        use vstd::prelude::*;
+
+        fn wrong_range(s: &[u8]) {
+            assume(s.len() == 5);
+            let x = &s[1..];
+            assert(x@ == s@.subrange(0, 5)); // FAILS
+        }
+
+        fn range_from_bounds(s: &[u8]) {
+            assume(s.len() == 5);
+            let _ = &s[7..]; // FAILS
+        }
+    } => Err(err) => assert_fails(err, 2)
+}
+
+test_verify_one_file! {
     #[test] test_array_index verus_code! {
         use std::ops::Index;
         use vstd::prelude::*;
