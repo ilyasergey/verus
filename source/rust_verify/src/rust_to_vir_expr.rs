@@ -656,7 +656,12 @@ pub(crate) fn pattern_to_vir_unadjusted<'tcx>(
 ) -> Result<vir::ast::Pattern, VirErr> {
     let tcx = bctx.ctxt.tcx;
     let mut pat_typ = typ_of_node_unadjusted(bctx, pat.span, &pat.hir_id)?;
-    unsupported_err_unless!(pat.default_binding_modes, pat.span, "destructuring assignment");
+    // Rust lowers a destructuring assignment into a synthetic `let` whose
+    // root pattern has `default_binding_modes == false`, followed by ordinary
+    // assignments from the temporary pattern bindings to the original
+    // places.  Translating that synthetic declaration preserves Rust's
+    // evaluate-the-RHS-once and simultaneous-assignment semantics; the
+    // following ordinary assignments already use the normal place lowering.
     let pattern = match &pat.kind {
         PatKind::Wild => PatternX::Wildcard(false),
         PatKind::Binding(_binding_mode, canonical, x, subpat) => {

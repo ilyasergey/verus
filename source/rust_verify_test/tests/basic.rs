@@ -810,14 +810,35 @@ test_verify_one_file! {
     } => Ok(())
 }
 
-test_verify_one_file! {
-    #[test] destructuring_assignment_unsupported verus_code! {
+test_verify_one_file_with_options! {
+    #[test] destructuring_assignment_tuple_semantics ["--compile"] => verus_code! {
         fn test() {
-            let mut a = 0;
-            let mut b = 0;
-            (a, b) = (1, 2);
+            let mut a = 1u64;
+            let mut b = 2u64;
+
+            // The RHS is evaluated before either destination is updated.
+            (a, b) = (b, a);
+            assert(a == 2);
+            assert(b == 1);
+
+            // Nested tuple patterns and wildcards use the same rustc
+            // assignment desugaring as the flat pattern needed by SHA-3 rho.
+            ((a, _), b) = ((4, 99), 5);
+            assert(a == 4);
+            assert(b == 5);
         }
-    } => Err(err) => assert_vir_error_msg(err, "The verifier does not yet support the following Rust feature: destructuring assignment")
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] destructuring_assignment_tuple_wrong verus_code! {
+        fn test() {
+            let mut a = 1u64;
+            let mut b = 2u64;
+            (a, b) = (b, a);
+            assert(a == 1); // FAILS
+        }
+    } => Err(err) => assert_fails(err, 1)
 }
 
 test_verify_one_file! {

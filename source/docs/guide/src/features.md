@@ -137,7 +137,7 @@ Note that Verus is in active development. If a feature is unsupported, it might 
   </tr>
   <tr>
     <td><a href="https://doc.rust-lang.org/reference/expressions/operator-expr.html?highlight=assignment#destructuring-assignments">Destructuring assignment</a></td>
-    <td>Not supported</td>
+    <td>Partially supported (tuple patterns whose component assignments are supported)</td>
   </tr>
   <tr>
     <td><code>==</code>, <code>!=</code></td>
