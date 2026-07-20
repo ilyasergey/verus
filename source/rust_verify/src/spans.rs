@@ -288,6 +288,14 @@ impl SpanContextX {
     }
 
     pub(crate) fn to_air_span(&self, span: Span) -> vir::messages::Span {
+        // Vermilion accommodation (vermilion#44): code expanded from a macro
+        // (e.g. vstd's `calc!` internals) otherwise carries the macro
+        // DEFINITION file in its span, which mis-attributes the enclosing
+        // function's artifacts and points diagnostics outside the user's
+        // crate. Resolve such spans to their source call site, exactly like
+        // rustc diagnostics do. Ordinary `verus!{}` token spans are
+        // call-site spans already and are unaffected.
+        let span = if span.from_expansion() { span.source_callsite() } else { span };
         let raw_span = to_raw_span(span);
 
         let id = self.get_next_span_id();
